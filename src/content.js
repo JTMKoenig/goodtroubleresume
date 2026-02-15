@@ -323,7 +323,7 @@ function parseJsonLdMaterials() {
     if (materials) {
       return {
         materials,
-        confidence: confidenceForMaterials(materials),
+        confidence: "high",
         source: "jsonld"
       };
     }
@@ -335,7 +335,7 @@ function parseJsonLdMaterials() {
     if (materials) {
       return {
         materials,
-        confidence: confidenceForMaterials(materials),
+        confidence: "medium",
         source: "jsonld"
       };
     }
@@ -346,6 +346,18 @@ function parseJsonLdMaterials() {
     confidence: "none",
     source: "none"
   };
+}
+
+function sentencePunctCount(text) {
+  return (text.match(/[.!?]/g) || []).length;
+}
+
+function hasLabeledSpecs(text) {
+  return /(^|[•|\n])\s*(shell|lining|body|fabric|trim|pocket|fill|outer|inner)\s*:/i.test(text);
+}
+
+function looksLikeDescriptionBlob(text, score = materialScore(text)) {
+  return Boolean(text) && text.length > 350 && score < 20 && /[.!?]/.test(text);
 }
 
 function materialScore(resultString) {
@@ -362,6 +374,41 @@ function materialScore(resultString) {
   if (fiberMatches) {
     score += fiberMatches.length * 2;
   }
+
+  const digitMatches = resultString.match(/\d/g);
+  if (digitMatches) {
+    score += Math.min(4, digitMatches.length);
+  }
+
+  const len = resultString.length;
+  let lengthPenalty = 0;
+  if (len > 220) {
+    lengthPenalty += 8;
+  }
+  if (len > 350) {
+    lengthPenalty += 8;
+  }
+
+  const punctCount = sentencePunctCount(resultString);
+  let punctuationPenalty = 0;
+  if (punctCount >= 1) {
+    punctuationPenalty += 4;
+  }
+  if (punctCount >= 2) {
+    punctuationPenalty += 6;
+  }
+
+  if (/(cozy|warm|embrace|hugged|revamped|designed in-house|authentic touch|no-gimmicks|elegant)/i.test(resultString)) {
+    score -= 6;
+  }
+
+  if (hasLabeledSpecs(resultString)) {
+    lengthPenalty = Math.max(0, lengthPenalty - 4);
+    punctuationPenalty = Math.max(0, punctuationPenalty - 2);
+  }
+
+  score -= lengthPenalty;
+  score -= punctuationPenalty;
 
   if (resultString.length < 6) {
     score -= 5;
@@ -458,7 +505,9 @@ function extractMaterials() {
   const domLeafResult = buildResultFromHits(collectLeafHits(), "dom_leaf");
   const domContainerResult = buildResultFromHits(collectContainerHits(), "dom_container");
 
-  const candidates = [jsonLdResult, domLeafResult, domContainerResult].filter((result) => result?.materials);
+  const candidates = [jsonLdResult, domLeafResult, domContainerResult]
+    .filter((result) => result?.materials)
+    .filter((candidate) => !looksLikeDescriptionBlob(candidate.materials));
 
   if (candidates.length === 0) {
     return {
@@ -478,20 +527,25 @@ function extractMaterials() {
 
   if (DEBUG_MATERIALS) {
     console.groupCollapsed("[materials] candidates");
-    console.table(candidates.map((c) => ({
-      source: c.source,
-      confidence: c.confidence,
-      score: materialScore(c.materials),
-      length: (c.materials || "").length,
-      materials: c.materials
-    })));
+    console.table(candidates.map((c) => {
+      const score = materialScore(c.materials);
+      return {
+        source: c.source,
+        confidence: c.confidence,
+        score,
+        length: (c.materials || "").length,
+        sentencePunctCount: sentencePunctCount(c.materials || ""),
+        looksLikeDescription: looksLikeDescriptionBlob(c.materials, score),
+        materials: c.materials
+      };
+    }));
     console.log("best:", best?.source, best?.materials);
     console.groupEnd();
   }
 
   return {
     materials: best.materials,
-    confidence: confidenceForMaterials(best.materials),
+    confidence: best.confidence || confidenceForMaterials(best.materials),
     source: best.source
   };
 }
