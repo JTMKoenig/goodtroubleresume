@@ -5,6 +5,7 @@ const MATERIAL_FIELD_RE = /^(material|materials|fabric|composition)$/i;
 const MATERIAL_NAME_RE = /(material|materials|fabric|composition)/i;
 const MAX_MATERIAL_ENTRIES = 4;
 const FIBER_MATCH_RE = new RegExp(FIBER_RE.source, "gi");
+const MATERIAL_PHRASE_RE = new RegExp(`\\b\\d{1,3}\\s*%\\s*(?:[a-z]+(?:\\s+[a-z]+){0,2}\\s+)?${FIBER_RE.source}\\b`, "gi");
 
 function normalizeText(text) {
   return text.replace(/\s+/g, " ").trim().replace(/\.$/, "");
@@ -12,6 +13,64 @@ function normalizeText(text) {
 
 function isMaterialCandidate(text) {
   return Boolean(text) && PERCENT_RE.test(text) && FIBER_RE.test(text) && !EXCLUDE_RE.test(text);
+}
+
+
+function extractMaterialPhrases(text) {
+  const normalized = normalizeText(text || "");
+  if (!normalized) {
+    return [];
+  }
+
+  const phrases = [];
+  const seen = new Set();
+  const matches = normalized.match(MATERIAL_PHRASE_RE) || [];
+
+  for (const match of matches) {
+    const phrase = normalizeText(match);
+    const key = phrase.toLowerCase();
+
+    if (!phrase || seen.has(key)) {
+      continue;
+    }
+
+    seen.add(key);
+    phrases.push(phrase);
+
+    if (phrases.length >= MAX_MATERIAL_ENTRIES) {
+      break;
+    }
+  }
+
+  return phrases;
+}
+
+function isCleanLabeledCompositionLine(text) {
+  if (!text || text.length > 180 || !text.includes(":")) {
+    return false;
+  }
+
+  const hasPercentFiber = PERCENT_RE.test(text) && FIBER_RE.test(text);
+  return hasPercentFiber && !EXCLUDE_RE.test(text);
+}
+
+function addMaterialHitsFromText(hits, text) {
+  if (!text || EXCLUDE_RE.test(text)) {
+    return;
+  }
+
+  if (isCleanLabeledCompositionLine(text)) {
+    hits.add(text);
+    return;
+  }
+
+  const phrases = extractMaterialPhrases(text);
+  for (const phrase of phrases) {
+    hits.add(phrase);
+    if (hits.size >= MAX_MATERIAL_ENTRIES) {
+      break;
+    }
+  }
 }
 
 function toMaterialEntries(value) {
@@ -244,15 +303,13 @@ function collectLeafHits() {
   for (const node of leafNodes) {
     const text = normalizeText(node.innerText || node.textContent || "");
 
-    if (text.length === 0 || text.length > 160) {
+    if (text.length === 0 || text.length > 1200) {
       continue;
     }
 
-    if (isMaterialCandidate(text)) {
-      hits.add(text);
-      if (hits.size >= 4) {
-        break;
-      }
+    addMaterialHitsFromText(hits, text);
+    if (hits.size >= MAX_MATERIAL_ENTRIES) {
+      break;
     }
   }
 
@@ -278,11 +335,9 @@ function collectContainerHits() {
         continue;
       }
 
-      if (isMaterialCandidate(text)) {
-        hits.add(text);
-        if (hits.size >= 4) {
-          return Array.from(hits);
-        }
+      addMaterialHitsFromText(hits, text);
+      if (hits.size >= MAX_MATERIAL_ENTRIES) {
+        return Array.from(hits);
       }
     }
   }
