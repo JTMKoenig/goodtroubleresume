@@ -4,6 +4,7 @@ const EXCLUDE_RE = /(save|discount|subscribe|sign up|coupon|reward|sale|% off)/i
 const MATERIAL_FIELD_RE = /^(material|materials|fabric|composition)$/i;
 const MATERIAL_NAME_RE = /(material|materials|fabric|composition)/i;
 const MAX_MATERIAL_ENTRIES = 4;
+const FIBER_MATCH_RE = new RegExp(FIBER_RE.source, "gi");
 
 function normalizeText(text) {
   return text.replace(/\s+/g, " ").trim().replace(/\.$/, "");
@@ -185,6 +186,57 @@ function parseJsonLdMaterials() {
   };
 }
 
+function materialScore(resultString) {
+  if (!resultString) {
+    return 0;
+  }
+
+  let score = 0;
+  if (PERCENT_RE.test(resultString)) {
+    score += 10;
+  }
+
+  const fiberMatches = resultString.match(FIBER_MATCH_RE);
+  if (fiberMatches) {
+    score += fiberMatches.length * 2;
+  }
+
+  if (resultString.length < 6) {
+    score -= 5;
+  }
+
+  return score;
+}
+
+function confidenceForMaterials(materials) {
+  if (!materials) {
+    return "none";
+  }
+
+  if (PERCENT_RE.test(materials)) {
+    return "high";
+  }
+
+  if (FIBER_RE.test(materials)) {
+    return "medium";
+  }
+
+  return "low";
+}
+
+function buildResultFromHits(hits, source) {
+  if (!hits || hits.length === 0) {
+    return null;
+  }
+
+  const materials = hits.slice(0, MAX_MATERIAL_ENTRIES).join(" • ");
+  return {
+    materials,
+    confidence: confidenceForMaterials(materials),
+    source
+  };
+}
+
 function collectLeafHits() {
   const hits = new Set();
   const leafNodes = document.querySelectorAll("li, dd, p, span, td");
@@ -240,32 +292,31 @@ function collectContainerHits() {
 
 function extractMaterials() {
   const jsonLdResult = parseJsonLdMaterials();
-  if (jsonLdResult.materials) {
-    return jsonLdResult;
-  }
+  const domLeafResult = buildResultFromHits(collectLeafHits(), "dom_leaf");
+  const domContainerResult = buildResultFromHits(collectContainerHits(), "dom_container");
 
-  const leafHits = collectLeafHits();
-  if (leafHits.length > 0) {
+  const candidates = [jsonLdResult, domLeafResult, domContainerResult].filter((result) => result?.materials);
+
+  if (candidates.length === 0) {
     return {
-      materials: leafHits.join(" • "),
-      confidence: "high",
-      source: "dom_leaf"
+      materials: null,
+      confidence: "none",
+      source: "none"
     };
   }
 
-  const containerHits = collectContainerHits();
-  if (containerHits.length > 0) {
-    return {
-      materials: containerHits.join(" • "),
-      confidence: "high",
-      source: "dom_container"
-    };
-  }
+  const best = candidates.reduce((top, current) => {
+    if (!top) {
+      return current;
+    }
+
+    return materialScore(current.materials) > materialScore(top.materials) ? current : top;
+  }, null);
 
   return {
-    materials: null,
-    confidence: "none",
-    source: "none"
+    materials: best.materials,
+    confidence: confidenceForMaterials(best.materials),
+    source: best.source
   };
 }
 
