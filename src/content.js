@@ -4,6 +4,7 @@ const EXCLUDE_RE = /(save|discount|subscribe|sign up|coupon|reward|sale|% off)/i
 const MATERIAL_FIELD_RE = /^(material|materials|fabric|composition)$/i;
 const MATERIAL_NAME_RE = /(material|materials|fabric|composition)/i;
 const MAX_MATERIAL_ENTRIES = 4;
+const DEBUG_MATERIALS = true;
 const FIBER_MATCH_RE = new RegExp(FIBER_RE.source, "gi");
 const MATERIAL_PHRASE_RE = new RegExp(`\\b\\d{1,3}\\s*%\\s*(?:[a-z]+(?:\\s+[a-z]+){0,2}\\s+)?${FIBER_RE.source}\\b`, "gi");
 
@@ -97,6 +98,100 @@ function addMaterialEntry(set, value) {
       break;
     }
   }
+}
+
+function postProcessMaterials(rawMaterials, contextLabel = "") {
+  if (!rawMaterials || !String(rawMaterials).trim()) {
+    return null;
+  }
+
+  const entries = toMaterialEntries(rawMaterials);
+  if (entries.length === 0) {
+    return null;
+  }
+
+  const deduped = [];
+  const seen = new Set();
+
+  for (const entry of entries) {
+    const display = normalizeText(entry);
+    const key = display.toLowerCase();
+    if (!display || seen.has(key)) {
+      continue;
+    }
+
+    seen.add(key);
+    deduped.push({ key, display });
+  }
+
+  const subsetFiltered = deduped.filter((a, idxA) => {
+    const aTokens = a.key.split(/\s+/).filter(Boolean);
+
+    for (let idxB = 0; idxB < deduped.length; idxB += 1) {
+      if (idxA === idxB) {
+        continue;
+      }
+
+      const b = deduped[idxB];
+      const containsDirect = b.key.includes(a.key);
+      const containsAllTokens = aTokens.length > 0 && aTokens.every((token) => b.key.includes(token));
+
+      if ((containsDirect || containsAllTokens) && b.key.length >= a.key.length + 6) {
+        return false;
+      }
+    }
+
+    return true;
+  });
+
+  let result = null;
+  if (subsetFiltered.length === 0) {
+    result = null;
+  } else if (subsetFiltered.length === 1) {
+    result = subsetFiltered[0].display;
+  } else {
+    const scored = subsetFiltered.map((item) => {
+      let score = 0;
+      if (PERCENT_RE.test(item.display)) {
+        score += 3;
+      }
+      if (FIBER_RE.test(item.display)) {
+        score += 2;
+      }
+      if (item.display.includes(":")) {
+        score += 2;
+      }
+      if (item.display.length > 220) {
+        score -= 2;
+      }
+      if (/(soft|premium|comfortable|perfect|everyday)/i.test(item.display)) {
+        score -= 2;
+      }
+
+      return { ...item, score };
+    }).sort((a, b) => b.score - a.score || b.display.length - a.display.length);
+
+    const top = scored[0];
+    const second = scored[1];
+
+    if (top && second && top.score >= second.score + 2) {
+      result = top.display;
+    } else {
+      result = scored.slice(0, MAX_MATERIAL_ENTRIES).map((item) => item.display).join(" • ");
+    }
+  }
+
+  if (DEBUG_MATERIALS) {
+    console.groupCollapsed(`[materials] postProcess ${contextLabel}`);
+    console.log("raw:", rawMaterials);
+    console.log("entries:", entries);
+    console.log("deduped:", deduped.map((item) => item.display));
+    console.log("subsetFiltered:", subsetFiltered.map((item) => item.display));
+    console.log("result:", result);
+    console.groupEnd();
+  }
+
+  return result;
 }
 
 function hasProductType(value) {
@@ -223,19 +318,27 @@ function parseJsonLdMaterials() {
   }
 
   if (explicitHits.size > 0) {
-    return {
-      materials: Array.from(explicitHits).slice(0, MAX_MATERIAL_ENTRIES).join(" • "),
-      confidence: "high",
-      source: "jsonld"
-    };
+    const raw = Array.from(explicitHits).slice(0, MAX_MATERIAL_ENTRIES).join(" • ");
+    const materials = postProcessMaterials(raw, "jsonld_explicit");
+    if (materials) {
+      return {
+        materials,
+        confidence: confidenceForMaterials(materials),
+        source: "jsonld"
+      };
+    }
   }
 
   if (descriptionHits.size > 0) {
-    return {
-      materials: Array.from(descriptionHits).slice(0, MAX_MATERIAL_ENTRIES).join(" • "),
-      confidence: "medium",
-      source: "jsonld"
-    };
+    const raw = Array.from(descriptionHits).slice(0, MAX_MATERIAL_ENTRIES).join(" • ");
+    const materials = postProcessMaterials(raw, "jsonld_description");
+    if (materials) {
+      return {
+        materials,
+        confidence: confidenceForMaterials(materials),
+        source: "jsonld"
+      };
+    }
   }
 
   return {
@@ -288,7 +391,12 @@ function buildResultFromHits(hits, source) {
     return null;
   }
 
-  const materials = hits.slice(0, MAX_MATERIAL_ENTRIES).join(" • ");
+  const raw = hits.slice(0, MAX_MATERIAL_ENTRIES).join(" • ");
+  const materials = postProcessMaterials(raw, source);
+  if (!materials) {
+    return null;
+  }
+
   return {
     materials,
     confidence: confidenceForMaterials(materials),
@@ -367,6 +475,19 @@ function extractMaterials() {
 
     return materialScore(current.materials) > materialScore(top.materials) ? current : top;
   }, null);
+
+  if (DEBUG_MATERIALS) {
+    console.groupCollapsed("[materials] candidates");
+    console.table(candidates.map((c) => ({
+      source: c.source,
+      confidence: c.confidence,
+      score: materialScore(c.materials),
+      length: (c.materials || "").length,
+      materials: c.materials
+    })));
+    console.log("best:", best?.source, best?.materials);
+    console.groupEnd();
+  }
 
   return {
     materials: best.materials,
