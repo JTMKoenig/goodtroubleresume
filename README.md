@@ -1,8 +1,6 @@
 # Materials Finder (Chrome Extension, MV3)
 
-Materials Finder is a proof-of-concept Chrome extension I built to make finding clothing materials easier while shopping online.
-
-On many ecommerce sites, material information is buried in multiple tabs/accordions, so users have to click around and scan long product pages. This extension reduces that friction to one click: open the popup and see the extracted composition immediately.
+Materials Finder is a proof-of-concept Chrome extension I built to make it easier to find what material clothing is made from when shopping online.
 
 ## Problem and motivation
 
@@ -11,7 +9,7 @@ When shopping for clothes, material composition matters for comfort, quality, ca
 This project focuses on solving that user pain point with a lightweight browser extension that:
 
 - pulls likely material composition text from the current product page,
-- explains where the data came from,
+- explains where the data came from, (proof of concept only, for debugging)
 - and provides a confidence signal for the extracted result.
 
 ## Current functionality
